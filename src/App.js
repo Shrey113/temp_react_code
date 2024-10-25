@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 
-const socket = io('http://192.168.29.193:4000');
+const socket = io('https://temp-server-ple8.onrender.com');
 
 const stunConfig = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
