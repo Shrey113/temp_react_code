@@ -1,200 +1,105 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 
-const socket = io('https://temp-server-ple8.onrender.com/');
+const socket = io('http://localhost:5000'); // Adjust for your server URL
 
-const stunConfig = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-};
+function App() {
+  const [isCallActive, setIsCallActive] = useState(false);
+  const localAudioRef = useRef(null);
+  const remoteAudioRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const localStreamRef = useRef(null);
 
-const App = () => {
-  const [userEmail, setUserEmail] = useState('');
-  const [emailSubmitted, setEmailSubmitted] = useState(false);
-  const [availableUsers, setAvailableUsers] = useState([]);
-  const [incomingCall, setIncomingCall] = useState(null);
-  const [peerConnection, setPeerConnection] = useState(null);
-  const [localStream, setLocalStream] = useState(null);
-  const [remoteAudio, setRemoteAudio] = useState(null); // Track the remote audio element
-
+  const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+  
   useEffect(() => {
-    const getUserMediaPermissions = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        setLocalStream(stream);
-      } catch (error) {
-        console.error('Error accessing media devices:', error);
-        alert('Please allow audio access to use this feature.');
-      }
-    };
-
-    getUserMediaPermissions();
-
-    if (emailSubmitted) {
-      socket.emit('registerUser', userEmail);
-    }
-  }, [userEmail, emailSubmitted]);
-
-  useEffect(() => {
-    if (emailSubmitted) {
-      socket.emit('registerUser', userEmail);
-    }
-
-    socket.on('updateUserList', (users) => {
-      setAvailableUsers(users.filter(email => email !== userEmail));
-    });
-
-    socket.on('incomingCall', ({ from }) => {
-      setIncomingCall(from);
-    });
-
-    socket.on('offer', async ({ from, offer }) => {
-      if (!peerConnection) {
-        const pc = new RTCPeerConnection(stunConfig);
-        pc.onicecandidate = (event) => {
-          if (event.candidate) {
-            socket.emit('iceCandidate', { to: from, candidate: event.candidate });
-          }
-        };
-        pc.ontrack = (event) => {
-          const audio = new Audio();
-          audio.srcObject = event.streams[0];
-          audio.play();
-          setRemoteAudio(audio);
-        };
-
-        setPeerConnection(pc);
-
-        try {
-          await pc.setRemoteDescription(new RTCSessionDescription(offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          socket.emit('answer', { to: from, answer });
-        } catch (error) {
-          console.error('Error handling offer:', error);
-        }
-      }
-    });
-
-    socket.on('answer', async ({ answer }) => {
-      if (peerConnection && peerConnection.signalingState === 'have-local-offer') {
-        try {
-          await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-        } catch (error) {
-          console.error('Error setting remote description for answer:', error);
-        }
-      }
-    });
-
-    socket.on('iceCandidate', async ({ candidate }) => {
-      if (peerConnection) {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-      }
-    });
+    // Set up socket listeners for offer, answer, and ICE candidates
+    socket.on('offer', handleReceiveOffer);
+    socket.on('answer', handleReceiveAnswer);
+    socket.on('ice-candidate', handleNewICECandidate);
 
     return () => {
-      socket.off('updateUserList');
-      socket.off('incomingCall');
-      socket.off('offer');
-      socket.off('answer');
-      socket.off('iceCandidate');
+      socket.off('offer', handleReceiveOffer);
+      socket.off('answer', handleReceiveAnswer);
+      socket.off('ice-candidate', handleNewICECandidate);
     };
-  }, [peerConnection, userEmail, emailSubmitted]);
+  }, []);
 
-  const submitEmail = () => {
-    if (userEmail) {
-      setEmailSubmitted(true);
-    }
+  const handleReceiveOffer = async (offer) => {
+    const peerConnection = createPeerConnection();
+    peerConnectionRef.current = peerConnection;
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+    
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+    socket.emit('answer', answer);
   };
 
-  const callUser = async (callEmail) => {
-    const pc = new RTCPeerConnection(stunConfig);
-    pc.onicecandidate = (event) => {
+  const handleReceiveAnswer = async (answer) => {
+    const peerConnection = peerConnectionRef.current;
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+  };
+
+  const handleNewICECandidate = (candidate) => {
+    const peerConnection = peerConnectionRef.current;
+    peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+  };
+
+  const createPeerConnection = () => {
+    const peerConnection = new RTCPeerConnection({ iceServers });
+    peerConnection.ontrack = (event) => {
+      remoteAudioRef.current.srcObject = event.streams[0];
+    };
+    peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
-        socket.emit('iceCandidate', { to: callEmail, candidate: event.candidate });
+        socket.emit('ice-candidate', event.candidate);
       }
     };
-    pc.ontrack = (event) => {
-      const audio = new Audio();
-      audio.srcObject = event.streams[0];
-      audio.play();
-      setRemoteAudio(audio);
-    };
-
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-        setLocalStream(stream);
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit('callUser', { to: callEmail, from: userEmail, offer });
-
-        setPeerConnection(pc);
-      } catch (error) {
-        console.error('Error accessing media devices:', error);
-      }
-    } else {
-      console.error("getUserMedia is not supported on this browser.");
-    }
+    return peerConnection;
   };
 
-  const pickCall = async () => {
-    if (!peerConnection) return;
-    setIncomingCall(null);
+  const startCall = async () => {
+    setIsCallActive(true);
+    const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    localAudioRef.current.srcObject = localStream;
+    localStreamRef.current = localStream;
+
+    const peerConnection = createPeerConnection();
+    peerConnectionRef.current = peerConnection;
+
+    localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
+
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    socket.emit('offer', offer);
   };
 
   const endCall = () => {
-    if (peerConnection) {
-      peerConnection.close();
-      setPeerConnection(null);
+    setIsCallActive(false);
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
     }
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-      setLocalStream(null);
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
     }
-    if (remoteAudio) {
-      remoteAudio.pause();
-      remoteAudio.srcObject = null;
-      setRemoteAudio(null);
-    }
-    setIncomingCall(null);
+    peerConnectionRef.current = null;
+    localStreamRef.current = null;
   };
 
   return (
     <div>
-      {!emailSubmitted ? (
-        <div>
-          <input
-            type="text"
-            placeholder="Enter your email"
-            value={userEmail}
-            onChange={(e) => setUserEmail(e.target.value)}
-          />
-          <button onClick={submitEmail}>Submit</button>
-        </div>
+      <h1>React Voice Call with WebRTC and Socket.io</h1>
+      {!isCallActive ? (
+        <button onClick={startCall}>Start Call</button>
       ) : (
-        <div>
-          <h3>Available Users</h3>
-          <ul>
-            {availableUsers.map((email) => (
-              <li key={email}>
-                {email}
-                <button onClick={() => callUser(email)}>Call</button>
-              </li>
-            ))}
-          </ul>
-          {incomingCall && (
-            <div>
-              <p>Incoming call from: {incomingCall}</p>
-              <button onClick={pickCall}>Pick up</button>
-              <button onClick={endCall}>End</button>
-            </div>
-          )}
-        </div>
+        <button onClick={endCall}>End Call</button>
       )}
+      <div>
+        <audio ref={localAudioRef} autoPlay muted></audio>
+        <audio ref={remoteAudioRef} autoPlay></audio>
+      </div>
     </div>
   );
-};
+}
 
 export default App;
