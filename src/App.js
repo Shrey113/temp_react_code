@@ -1,7 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
-
-const socket = io('http://localhost:5000'); // Adjust for your server URL
+const socket = io('https://temp-server-jdzm.onrender.com'); // Adjust for your server URL
 
 function App() {
   const [isCallActive, setIsCallActive] = useState(false);
