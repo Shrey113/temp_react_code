@@ -1,9 +1,11 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
-const socket = io('https://temp-server-jdzm.onrender.com'); // Adjust for your server URL
+
+const socket = io('https://temp-server-jdzm.onrender.com'); // Update this with your server URL
 
 function App() {
   const [isCallActive, setIsCallActive] = useState(false);
+  const [isInitiator, setIsInitiator] = useState(false); // Track initiator status
   const localAudioRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const peerConnectionRef = useRef(null);
@@ -12,7 +14,6 @@ function App() {
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
   
   useEffect(() => {
-    // Set up socket listeners for offer, answer, and ICE candidates
     socket.on('offer', handleReceiveOffer);
     socket.on('answer', handleReceiveAnswer);
     socket.on('ice-candidate', handleNewICECandidate);
@@ -25,40 +26,45 @@ function App() {
   }, []);
 
   const handleReceiveOffer = async (offer) => {
-    const peerConnection = createPeerConnection();
-    peerConnectionRef.current = peerConnection;
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-    
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
+    if (!peerConnectionRef.current) {
+      const peerConnection = createPeerConnection();
+      peerConnectionRef.current = peerConnection;
+    }
+
+    await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await peerConnectionRef.current.createAnswer();
+    await peerConnectionRef.current.setLocalDescription(answer);
     socket.emit('answer', answer);
   };
 
   const handleReceiveAnswer = async (answer) => {
-    const peerConnection = peerConnectionRef.current;
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
   };
 
   const handleNewICECandidate = (candidate) => {
-    const peerConnection = peerConnectionRef.current;
-    peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
   };
 
   const createPeerConnection = () => {
     const peerConnection = new RTCPeerConnection({ iceServers });
     peerConnection.ontrack = (event) => {
-      remoteAudioRef.current.srcObject = event.streams[0];
+      if (event.streams && event.streams[0]) {
+        remoteAudioRef.current.srcObject = event.streams[0];
+      }
     };
+
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         socket.emit('ice-candidate', event.candidate);
       }
     };
+
     return peerConnection;
   };
 
   const startCall = async () => {
     setIsCallActive(true);
+
     const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     localAudioRef.current.srcObject = localStream;
     localStreamRef.current = localStream;
@@ -68,9 +74,15 @@ function App() {
 
     localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
 
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socket.emit('offer', offer);
+    // Wait briefly to check if an incoming offer arrives; if not, create an offer
+    setTimeout(async () => {
+      if (!isInitiator && !peerConnectionRef.current.remoteDescription) {
+        setIsInitiator(true); // This peer becomes the initiator
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit('offer', offer);
+      }
+    }, 500); // Wait 500ms for an incoming offer
   };
 
   const endCall = () => {
@@ -83,6 +95,7 @@ function App() {
     }
     peerConnectionRef.current = null;
     localStreamRef.current = null;
+    setIsInitiator(false); // Reset initiator status
   };
 
   return (
