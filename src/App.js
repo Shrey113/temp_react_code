@@ -12,7 +12,7 @@ function App() {
   const localStreamRef = useRef(null);
 
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
-  
+
   useEffect(() => {
     socket.on('offer', handleReceiveOffer);
     socket.on('answer', handleReceiveAnswer);
@@ -47,15 +47,31 @@ function App() {
 
   const createPeerConnection = () => {
     const peerConnection = new RTCPeerConnection({ iceServers });
+    
+    // Listen for remote tracks
     peerConnection.ontrack = (event) => {
       if (event.streams && event.streams[0]) {
         remoteAudioRef.current.srcObject = event.streams[0];
       }
     };
 
+    // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         socket.emit('ice-candidate', event.candidate);
+      }
+    };
+
+    // Handle negotiationneeded (especially for the initiator)
+    peerConnection.onnegotiationneeded = async () => {
+      try {
+        if (isInitiator) {
+          const offer = await peerConnection.createOffer();
+          await peerConnection.setLocalDescription(offer);
+          socket.emit('offer', offer);
+        }
+      } catch (error) {
+        console.error('Error in onnegotiationneeded:', error);
       }
     };
 
@@ -72,17 +88,18 @@ function App() {
     const peerConnection = createPeerConnection();
     peerConnectionRef.current = peerConnection;
 
+    // Add local audio track to peer connection
     localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
 
-    // Wait briefly to check if an incoming offer arrives; if not, create an offer
+    // Set initiator status if no offer is received within 500ms
     setTimeout(async () => {
       if (!isInitiator && !peerConnectionRef.current.remoteDescription) {
-        setIsInitiator(true); // This peer becomes the initiator
+        setIsInitiator(true);
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         socket.emit('offer', offer);
       }
-    }, 500); // Wait 500ms for an incoming offer
+    }, 500);
   };
 
   const endCall = () => {
