@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 
-const socket = io('https://temp-server-ple8.onrender.com');
+const socket = io('https://temp-server-ple8.onrender.com/');
 
 const stunConfig = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
@@ -14,7 +14,7 @@ const App = () => {
   const [incomingCall, setIncomingCall] = useState(null);
   const [peerConnection, setPeerConnection] = useState(null);
   const [localStream, setLocalStream] = useState(null);
-  const [isOffering, setIsOffering] = useState(false);
+  const [remoteAudio, setRemoteAudio] = useState(null); // Track the remote audio element
 
   useEffect(() => {
     const getUserMediaPermissions = async () => {
@@ -56,9 +56,10 @@ const App = () => {
           }
         };
         pc.ontrack = (event) => {
-          const remoteAudio = document.createElement('audio');
-          remoteAudio.srcObject = event.streams[0];
-          remoteAudio.play();
+          const audio = new Audio();
+          audio.srcObject = event.streams[0];
+          audio.play();
+          setRemoteAudio(audio);
         };
 
         setPeerConnection(pc);
@@ -113,9 +114,10 @@ const App = () => {
       }
     };
     pc.ontrack = (event) => {
-      const remoteAudio = document.createElement('audio');
-      remoteAudio.srcObject = event.streams[0];
-      remoteAudio.play();
+      const audio = new Audio();
+      audio.srcObject = event.streams[0];
+      audio.play();
+      setRemoteAudio(audio);
     };
 
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -129,7 +131,6 @@ const App = () => {
         socket.emit('callUser', { to: callEmail, from: userEmail, offer });
 
         setPeerConnection(pc);
-        setIsOffering(true);
       } catch (error) {
         console.error('Error accessing media devices:', error);
       }
@@ -140,8 +141,6 @@ const App = () => {
 
   const pickCall = async () => {
     if (!peerConnection) return;
-
-    // When picking up the call, only the caller's audio is heard
     setIncomingCall(null);
   };
 
@@ -149,8 +148,15 @@ const App = () => {
     if (peerConnection) {
       peerConnection.close();
       setPeerConnection(null);
+    }
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
       setLocalStream(null);
-      setIsOffering(false);
+    }
+    if (remoteAudio) {
+      remoteAudio.pause();
+      remoteAudio.srcObject = null;
+      setRemoteAudio(null);
     }
     setIncomingCall(null);
   };
